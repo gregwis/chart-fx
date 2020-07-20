@@ -7,6 +7,7 @@ import java.util.Random;
 import java.util.Timer;
 import java.util.TimerTask;
 
+import de.gsi.chart.viewer.ChartManager;
 import javafx.animation.Animation;
 import javafx.animation.RotateTransition;
 import javafx.application.Application;
@@ -215,7 +216,7 @@ public class DataViewerSample extends Application {
 
         viewer.getUserToolBarItems().addAll(new ProfilerInfoBox(), newView, initialWindowState, new Label("Win-Decor:"), windowDecoration, detachableBox, listView);
         final Scene scene = new Scene(
-                new VBox(viewer.getToolBar(), viewer, new HBox(new Label("focus on: "), focusedOwner)), 1000, 600);
+                new VBox(viewer.getToolBar(), new HBox(new ChartManager(viewer), viewer), new HBox(new Label("focus on: "), focusedOwner)), 1000, 600);
         scene.focusOwnerProperty().addListener((ch, o, n) -> {
             if (n == null) {
                 focusedOwner.setText(null);
