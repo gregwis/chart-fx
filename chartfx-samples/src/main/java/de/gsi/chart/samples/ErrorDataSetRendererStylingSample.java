@@ -37,7 +37,7 @@ import de.gsi.chart.plugins.Zoomer;
 import de.gsi.chart.renderer.spi.ErrorDataSetRenderer;
 import de.gsi.chart.ui.ProfilerInfoBox;
 import de.gsi.chart.ui.ProfilerInfoBox.DebugLevel;
-import de.gsi.chart.samples.utils.css.CssEditor;
+import de.gsi.chart.ui.css.CssEditor;
 import de.gsi.dataset.DataSetError;
 import de.gsi.dataset.testdata.spi.CosineFunction;
 import de.gsi.dataset.testdata.spi.GaussFunction;

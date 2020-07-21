@@ -1,4 +1,4 @@
-package de.gsi.chart.samples.utils.css;
+package de.gsi.chart.ui.css;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;

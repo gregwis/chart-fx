@@ -2,11 +2,13 @@ package de.gsi.chart.viewer;
 
 import de.gsi.chart.axes.Axis;
 import de.gsi.chart.plugins.ChartPlugin;
+import de.gsi.chart.ui.css.CssEditor;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.geometry.Pos;
 import javafx.geometry.Side;
 import javafx.scene.Node;
+import javafx.scene.Parent;
 import javafx.scene.control.*;
 import javafx.scene.input.ClipboardContent;
 import javafx.scene.input.DataFormat;
@@ -55,6 +57,7 @@ public class ChartManager extends MasterDetailPane {
         // Property sheet
         // TODO: add filters to property view: only properties defined in chart-fx?
         // TODO: add additional editors for chart related properties
+        //       - auto completion for css?
         // TODO: add new child elements (needs a way to add factory methods)
         PropertySheet propertySheet = new PropertySheet();
         final Tab propertyTab = new Tab("Properties", propertySheet);
@@ -74,6 +77,8 @@ public class ChartManager extends MasterDetailPane {
         // css
         // TODO: CSS Pane
         final VBox cssVBox = new VBox();
+        CssEditor cssEditor = new CssEditor((Parent) root, "test", "", 200.0);
+        cssVBox.getChildren().add(cssEditor);
         final Tab cssTab = new Tab("CSS", cssVBox);
         cssTab.setClosable(false);
         tabPane.getTabs().add(cssTab);
@@ -259,7 +264,7 @@ public class ChartManager extends MasterDetailPane {
             } else if (root instanceof Axis) {
                 return new ChartFxAxisTreeItem(root);
             }
-            return null; // TODO: return default Object item
+            return new ChartFxNodeTreeItem(root);
         }
     }
 
@@ -380,6 +385,35 @@ public class ChartManager extends MasterDetailPane {
             }
             result.clear();
             result.addAll(AbstractChartFxTreeItem.get(((DataViewWindow) reference).getContent()));
+            if (result.size() == 0) {
+                this.isLeaf = true;
+            }
+            // TODO: add listeners
+            return result;
+        }
+    }
+
+    public static class ChartFxNodeTreeItem extends AbstractChartFxTreeItem {
+        public ChartFxNodeTreeItem(Object root) {
+            super(root);
+        }
+
+        @Override
+        public ObservableList<TreeItem<Object>> getChildren() {
+            final ObservableList<TreeItem<Object>> result = super.getChildren();
+            if (reference instanceof Parent) {
+                this.isLeaf = true;
+                return result;
+            }
+            if (result.size() > 0) {
+                return result;
+            }
+            final ObservableList<Node> children = ((Parent) reference).getChildrenUnmodifiable();
+            if (children == null) {
+                this.isLeaf = true;
+                return result;
+            }
+            result.setAll(children.stream().filter(a -> a instanceof Node).map(a -> AbstractChartFxTreeItem.get(a)).collect(Collectors.toList()));
             if (result.size() == 0) {
                 this.isLeaf = true;
             }

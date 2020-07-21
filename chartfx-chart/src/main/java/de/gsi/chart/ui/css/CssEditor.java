@@ -1,4 +1,4 @@
-package de.gsi.chart.samples.utils.css;
+package de.gsi.chart.ui.css;
 
 import java.io.IOException;
 import java.net.URI;
@@ -15,6 +15,7 @@ import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.ComboBox;
+import javafx.scene.control.ListView;
 import javafx.scene.control.TextArea;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
@@ -42,7 +43,7 @@ public class CssEditor extends VBox {
         final ObservableList<String> stylesheets = scene.getStylesheets();
         stylesheets.add(CSS_PROTOCOL + name + CSS_POSTFIX);
 
-        final ComboBox<String> files = new ComboBox<>();
+        final ListView<String> files = new ListView<>();
         files.setPrefWidth(width);
         files.setMaxWidth(width);
         VBox.setVgrow(files, Priority.NEVER);
@@ -59,7 +60,7 @@ public class CssEditor extends VBox {
         VBox.setVgrow(buttons, Priority.NEVER);
         getChildren().addAll(files, editor, buttons);
         files.setItems(stylesheets);
-        files.valueProperty().addListener((prop, oldVal, newVal) -> {
+        files.getSelectionModel().selectedItemProperty().addListener((prop, oldVal, newVal) -> {
             URI uri;
             try {
                 if (newVal == null || newVal.isBlank()) {
@@ -92,8 +93,8 @@ public class CssEditor extends VBox {
         });
         apply.setOnAction(evt -> {
             int selIndex = files.getSelectionModel().getSelectedIndex();
-            int index = scene.getStylesheets().indexOf(files.getValue());
-            scene.getStylesheets().set(index, files.getValue());
+            int index = scene.getStylesheets().indexOf(files.getSelectionModel().getSelectedItem());
+            scene.getStylesheets().set(index, files.getSelectionModel().getSelectedItem());
             files.getSelectionModel().select(selIndex);
             // todo: trigger callback for repaint or trigger repaint for whole scene
         });
