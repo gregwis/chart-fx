@@ -7,6 +7,8 @@ import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
 
+import de.gsi.chart.axes.spi.AbstractAxis;
+import de.gsi.dataset.event.UpdateEvent;
 import javafx.animation.KeyFrame;
 import javafx.animation.KeyValue;
 import javafx.animation.Timeline;
@@ -18,12 +20,10 @@ import javafx.beans.property.SimpleIntegerProperty;
 import javafx.beans.property.SimpleObjectProperty;
 import javafx.beans.value.ChangeListener;
 import javafx.collections.FXCollections;
+import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
 import javafx.event.EventHandler;
-import javafx.geometry.Bounds;
-import javafx.geometry.Insets;
-import javafx.geometry.Orientation;
-import javafx.geometry.Point2D;
+import javafx.geometry.*;
 import javafx.scene.Cursor;
 import javafx.scene.Node;
 import javafx.scene.canvas.Canvas;
@@ -215,6 +215,26 @@ public class Zoomer extends ChartPlugin {
             }
 
             event.consume();
+            return;
+        }
+        // Zoom on individual axis
+        for (final Axis axis : getChart().getAxes()) {
+            if (!(axis instanceof AbstractAxis)) {
+                continue; // only AbstractAxis provides access to the getCanvas() method
+            }
+            // only listen to events within the axis
+            final Point2D mouseLoc = new Point2D(event.getScreenX(), event.getScreenY());
+            final Canvas canvas = ((AbstractAxis) axis).getCanvas();
+            final Bounds screenBounds = canvas.localToScreen(canvas.getBoundsInLocal());
+            if (screenBounds.contains(mouseLoc)) {
+                // allow to return to default view
+                if (zoomStacks.isEmpty()) {
+                    makeSnapshotOfView();
+                }
+                zoomOnAxis(axis, event);
+                event.consume();
+                return;
+            }
         }
     };
 
@@ -1167,7 +1187,8 @@ public class Zoomer extends ChartPlugin {
     }
 
     private static void zoomOnAxis(final Axis axis, final ScrollEvent event) {
-        if (hasBoundedRange(axis)) {
+        axis.setAutoRanging(false); // disable auto-ranging, s.t. axes are not bound anymore by it
+        if (hasBoundedRange(axis)) { // skip axes which are externally bound
             return;
         }
         final boolean isZoomIn = event.getDeltaY() > 0;
