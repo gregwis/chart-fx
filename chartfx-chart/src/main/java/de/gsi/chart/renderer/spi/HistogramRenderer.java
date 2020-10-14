@@ -45,6 +45,10 @@ public class HistogramRenderer extends AbstractDataSetManagement<HistogramRender
     private final BooleanProperty autoSorting = new SimpleBooleanProperty(this, "autoSorting", true);
     private final ObjectProperty<LineStyle> polyLineStyle = new SimpleObjectProperty<>(this, "polyLineStyle", LineStyle.HISTOGRAM_FILLED);
 
+    public BooleanProperty autoSortingProperty() {
+        return autoSorting;
+    }
+
     @Override
     public Canvas drawLegendSymbol(DataSet dataSet, int dsIndex, int width, int height) {
         final Canvas canvas = new Canvas(width, height);
@@ -79,6 +83,10 @@ public class HistogramRenderer extends AbstractDataSetManagement<HistogramRender
         return polyLineStyleProperty().get();
     }
 
+    public boolean isAutoSorting() {
+        return autoSortingProperty().get();
+    }
+
     /**
      * Sets whether renderer should draw no, simple (point-to-point), stair-case, Bezier, ... lines
      *
@@ -103,7 +111,7 @@ public class HistogramRenderer extends AbstractDataSetManagement<HistogramRender
             DataSet dataSet = localDataSetList.get(i);
             final int index = i;
             dataSet.lock().readLockGuardOptimistic(() -> {
-                if (!(dataSet instanceof Histogram) && isAutoSorting() && !isDataSetSorted(dataSet)) {
+                if (!(dataSet instanceof Histogram) && isAutoSorting() && (!isDataSetSorted(dataSet, DIM_X) && isDataSetSorted(dataSet, DIM_Y))) {
                     // replace DataSet with sorted variety
                     // do not need to do this for Histograms as they are always sorted by design
                     LimitedIndexedTreeDataSet newDataSet = new LimitedIndexedTreeDataSet(dataSet.getName(), Integer.MAX_VALUE);
@@ -134,6 +142,10 @@ public class HistogramRenderer extends AbstractDataSetManagement<HistogramRender
         return localDataSetList;
     }
 
+    public void setAutoSorting(final boolean autoSorting) {
+        this.autoSortingProperty().set(autoSorting);
+    }
+
     /**
      * Sets whether renderer should draw no, simple (point-to-point), stair-case, Bezier, ... lines
      *
@@ -143,6 +155,119 @@ public class HistogramRenderer extends AbstractDataSetManagement<HistogramRender
     public HistogramRenderer setPolyLineStyle(final LineStyle style) {
         polyLineStyleProperty().set(style);
         return getThis();
+    }
+
+    protected void drawHistograms(final GraphicsContext gc, final List<DataSet> dataSets, final Axis xAxis, final Axis yAxis, final int dataSetOffset) {
+        final ArrayDeque<DataSet> lockQueue = new ArrayDeque<>(dataSets.size());
+        try {
+            dataSets.forEach(ds -> {
+                lockQueue.push(ds);
+                ds.lock().readLock();
+            });
+
+            switch (getPolyLineStyle()) {
+            case NONE:
+                return;
+            case AREA:
+                drawPolyLineLine(gc, dataSets, xAxis, yAxis, dataSetOffset, true);
+                break;
+            case ZERO_ORDER_HOLDER:
+            case STAIR_CASE:
+                drawPolyLineStairCase(gc, dataSets, xAxis, yAxis, dataSetOffset, false);
+                break;
+            case HISTOGRAM:
+                drawPolyLineHistogram(gc, dataSets, xAxis, yAxis, dataSetOffset, false);
+                break;
+            case HISTOGRAM_FILLED:
+                drawPolyLineHistogram(gc, dataSets, xAxis, yAxis, dataSetOffset, true);
+                break;
+            case BEZIER_CURVE:
+                drawPolyLineHistogramBezier(gc, dataSets, xAxis, yAxis, dataSetOffset, true);
+                break;
+            case NORMAL:
+            default:
+                drawPolyLineLine(gc, dataSets, xAxis, yAxis, dataSetOffset, false);
+                break;
+            }
+        } finally {
+            // unlock in reverse order
+            while (!lockQueue.isEmpty()) {
+                lockQueue.pop().lock().readUnLock();
+            }
+        }
+    }
+
+    protected static void drawPolyLineHistogram(final GraphicsContext gc, final List<DataSet> dataSets, final Axis xAxis, final Axis yAxis, final int dataSetOffset, boolean filled) {
+        int lindex = dataSetOffset - 1;
+        for (DataSet ds : dataSets) {
+            lindex++;
+            if (ds.getDataCount() == 0) {
+                continue;
+            }
+            final boolean isVerticalDataSet = isVerticalDataSet(ds);
+
+            final int dimIndexAbscissa = isVerticalDataSet ? DIM_Y : DIM_X;
+            final int dimIndexOrdinate = isVerticalDataSet ? DIM_X : DIM_Y;
+            final Axis abscissa = isVerticalDataSet ? yAxis : xAxis;
+            final Axis ordinate = isVerticalDataSet ? xAxis : yAxis;
+
+            final int indexMin = Math.max(0, ds.getIndex(dimIndexAbscissa, Math.min(abscissa.getMin(), abscissa.getMax())));
+            final int indexMax = Math.min(ds.getDataCount(), ds.getIndex(dimIndexAbscissa, Math.max(abscissa.getMin(), abscissa.getMax()) + 1.0));
+
+            // need to allocate new array :-(
+            final int nRange = Math.abs(indexMax - indexMin);
+            final double[] newX = DoubleArrayCache.getInstance().getArrayExact(2 * (nRange + 1));
+            final double[] newY = DoubleArrayCache.getInstance().getArrayExact(2 * (nRange + 1));
+            final double axisMin = getAxisMin(xAxis, yAxis, !isVerticalDataSet);
+
+            for (int i = 0; i < nRange; i++) {
+                final int index = indexMin + i;
+                final double binValue = ordinate.getDisplayPosition(ds.get(dimIndexOrdinate, index));
+                final double binStart = abscissa.getDisplayPosition(getBinStart(ds, dimIndexAbscissa, index));
+                final double binStop = abscissa.getDisplayPosition(getBinStop(ds, dimIndexAbscissa, index));
+                newX[2 * i + 1] = binStart;
+                newY[2 * i + 1] = binValue;
+                newX[2 * i + 2] = binStop;
+                newY[2 * i + 2] = binValue;
+            }
+            // first point
+            newX[0] = newX[1];
+            newY[0] = axisMin;
+
+            // last point
+            newX[2 * (nRange + 1) - 1] = newX[2 * (nRange + 1) - 2];
+            newY[2 * (nRange + 1) - 1] = axisMin;
+
+            gc.save();
+            DefaultRenderColorScheme.setLineScheme(gc, ds.getStyle(), lindex);
+            DefaultRenderColorScheme.setGraphicsContextAttributes(gc, ds.getStyle());
+
+            drawPolygon(gc, newX, newY, filled, isVerticalDataSet);
+            gc.restore();
+
+            // release arrays to cache
+            DoubleArrayCache.getInstance().add(newX);
+            DoubleArrayCache.getInstance().add(newY);
+        }
+    }
+
+    protected static void drawPolygon(final GraphicsContext gc, final double[] newX, final double[] newY, final boolean filled, final boolean isVerticalDataSet) {
+        if (filled) {
+            // use stroke as fill colour
+            gc.setFill(gc.getStroke());
+            if (isVerticalDataSet) {
+                gc.fillPolygon(newY, newX, newX.length); // NOPMD NOSONAR - flip on purpose
+            } else {
+                gc.fillPolygon(newX, newY, newX.length);
+            }
+            return;
+        }
+        // stroke only
+        if (isVerticalDataSet) {
+            gc.strokePolyline(newY, newX, newX.length); // NOPMD NOSONAR - flip on purpose
+        } else {
+            gc.strokePolyline(newX, newY, newX.length);
+        }
     }
 
     protected static void drawPolyLineHistogramBezier(final GraphicsContext gc, final List<DataSet> dataSets, final Axis xAxis, final Axis yAxis, final int dataSetOffset, boolean filled) {
@@ -223,111 +348,6 @@ public class HistogramRenderer extends AbstractDataSetManagement<HistogramRender
             DoubleArrayCache.getInstance().add(yCp1);
             DoubleArrayCache.getInstance().add(xCp2);
             DoubleArrayCache.getInstance().add(yCp2);
-        }
-    }
-
-    protected void drawHistograms(final GraphicsContext gc, final List<DataSet> dataSets, final Axis xAxis, final Axis yAxis, final int dataSetOffset) {
-        final ArrayDeque<DataSet> lockQueue = new ArrayDeque<>(dataSets.size());
-        try {
-            dataSets.forEach(ds -> {
-                lockQueue.push(ds);
-                ds.lock().readLock();
-            });
-
-            switch (getPolyLineStyle()) {
-            case NONE:
-                return;
-            case AREA:
-                drawPolyLineLine(gc, dataSets, xAxis, yAxis, dataSetOffset, true);
-                break;
-            case ZERO_ORDER_HOLDER:
-            case STAIR_CASE:
-                drawPolyLineStairCase(gc, dataSets, xAxis, yAxis, dataSetOffset, false);
-                break;
-            case HISTOGRAM:
-                drawPolyLineHistogram(gc, dataSets, xAxis, yAxis, dataSetOffset, false);
-                break;
-            case HISTOGRAM_FILLED:
-                drawPolyLineHistogram(gc, dataSets, xAxis, yAxis, dataSetOffset, true);
-                break;
-            case BEZIER_CURVE:
-                drawPolyLineHistogramBezier(gc, dataSets, xAxis, yAxis, dataSetOffset, true);
-                break;
-            case NORMAL:
-            default:
-                drawPolyLineLine(gc, dataSets, xAxis, yAxis, dataSetOffset, false);
-                break;
-            }
-        } finally {
-            // unlock in reverse order
-            while (!lockQueue.isEmpty()) {
-                lockQueue.pop().lock().readUnLock();
-            }
-        }
-    }
-
-    protected static void drawPolyLineHistogram(final GraphicsContext gc, final List<DataSet> dataSets, final Axis xAxis, final Axis yAxis, final int dataSetOffset, boolean filled) {
-        final double xAxisWidth = xAxis.getWidth();
-        final double xMin = xAxis.getValueForDisplay(0);
-        final double xMax = xAxis.getValueForDisplay(xAxisWidth);
-
-        int lindex = dataSetOffset - 1;
-        for (DataSet ds : dataSets) {
-            lindex++;
-            if (ds.getDataCount() == 0) {
-                continue;
-            }
-
-            gc.save();
-            DefaultRenderColorScheme.setLineScheme(gc, ds.getStyle(), lindex);
-            DefaultRenderColorScheme.setGraphicsContextAttributes(gc, ds.getStyle());
-            final int indexMin = Math.max(0, ds.getIndex(DIM_X, xMin));
-            final int indexMax = Math.min(ds.getIndex(DIM_X, xMax) + 1, ds.getDataCount());
-
-            final double yZero;
-            if (yAxis.isLogAxis()) {
-                yZero = Math.max(yAxis.getDisplayPosition(yAxis.getMin()), yAxis.getDisplayPosition(yAxis.getMax()));
-            } else {
-                yZero = Math.min(yAxis.getDisplayPosition(0), yAxis.getDisplayPosition(yAxis.getMin()));
-            }
-
-            final int nRange;
-            final double[] newX;
-            final double[] newY;
-
-            // need to allocate new array :-(
-            nRange = Math.abs(indexMax - indexMin);
-            newX = DoubleArrayCache.getInstance().getArrayExact(2 * (nRange + 1));
-            newY = DoubleArrayCache.getInstance().getArrayExact(2 * (nRange + 1));
-
-            for (int i = 0; i < nRange; i++) {
-                final int index = indexMin + i;
-                final double yBinValue = yAxis.getDisplayPosition(ds.get(DIM_Y, index));
-                newX[2 * i + 1] = xAxis.getDisplayPosition(getBinStart(ds, index));
-                newY[2 * i + 1] = yBinValue;
-                newX[2 * i + 2] = xAxis.getDisplayPosition(getBinStop(ds, index));
-                newY[2 * i + 2] = yBinValue;
-            }
-            // first point
-            newX[0] = newX[1];
-            newY[0] = yZero;
-
-            // last point
-            newX[2 * (nRange + 1) - 1] = newX[2 * (nRange + 1) - 2];
-            newY[2 * (nRange + 1) - 1] = yZero;
-
-            if (filled) {
-                // use stroke as fill colour
-                gc.setFill(gc.getStroke());
-                gc.fillPolygon(newX, newY, 2 * (nRange + 1));
-            } else {
-                gc.strokePolyline(newX, newY, 2 * (nRange + 1));
-            }
-            gc.restore();
-
-            // release arrays to cache
-            DoubleArrayCache.getInstance().add(newX);
-            DoubleArrayCache.getInstance().add(newY);
         }
     }
 
@@ -443,16 +463,16 @@ public class HistogramRenderer extends AbstractDataSetManagement<HistogramRender
         }
     }
 
-    protected static double estimateHalfBinWidth(final DataSet ds, final int index) {
+    protected static double estimateHalfBinWidth(final DataSet ds, final int dimIndex, final int index) {
         final int nMax = ds.getDataCount();
         if (nMax == 0) {
             return 0.5;
         } else if (nMax == 1) {
-            return 0.5 * Math.abs(ds.get(DIM_X, 1) - ds.get(DIM_X, 0));
+            return 0.5 * Math.abs(ds.get(dimIndex, 1) - ds.get(dimIndex, 0));
         }
-        final double binCentre = ds.get(DIM_X, index);
-        final double diffLeft = index - 1 >= 0 ? Math.abs(binCentre - ds.get(DIM_X, index - 1)) : -1;
-        final double diffRight = index + 1 < nMax ? Math.abs(ds.get(DIM_X, index + 1)) - binCentre : -1;
+        final double binCentre = ds.get(dimIndex, index);
+        final double diffLeft = index - 1 >= 0 ? Math.abs(binCentre - ds.get(dimIndex, index - 1)) : -1;
+        final double diffRight = index + 1 < nMax ? Math.abs(ds.get(dimIndex, index + 1)) - binCentre : -1;
         final boolean isInValidLeft = diffLeft < 0;
         final boolean isInValidRight = diffRight < 0;
         if (isInValidLeft && isInValidRight) {
@@ -463,27 +483,32 @@ public class HistogramRenderer extends AbstractDataSetManagement<HistogramRender
         return 0.5 * Math.min(diffLeft, diffRight);
     }
 
-    protected static double getBinStart(final DataSet ds, final int index) {
+    protected static double getBinStart(final DataSet ds, final int dimIndex, final int index) {
         if (ds instanceof Histogram) {
-            return ((Histogram) ds).getBinLimits(DIM_X, Histogram.Boundary.LOWER, index + 1); // '+1' because binIndex starts with '0' (under-flow bin)
+            return ((Histogram) ds).getBinLimits(dimIndex, Histogram.Boundary.LOWER, index + 1); // '+1' because binIndex starts with '0' (under-flow bin)
         }
-        return ds.get(DIM_X, index) - estimateHalfBinWidth(ds, index);
+        return ds.get(dimIndex, index) - estimateHalfBinWidth(ds, dimIndex, index);
     }
 
-    protected static double getBinStop(final DataSet ds, final int index) {
+    protected static double getBinStop(final DataSet ds, final int dimIndex, final int index) {
         if (ds instanceof Histogram) {
-            return ((Histogram) ds).getBinLimits(DIM_X, Histogram.Boundary.UPPER, index + 1); // '+1' because binIndex starts with '0' (under-flow bin)
+            return ((Histogram) ds).getBinLimits(dimIndex, Histogram.Boundary.UPPER, index + 1); // '+1' because binIndex starts with '0' (under-flow bin)
         }
-        return ds.get(DIM_X, index) + estimateHalfBinWidth(ds, index);
+        return ds.get(dimIndex, index) + estimateHalfBinWidth(ds, dimIndex, index);
     }
 
-    protected static boolean isDataSetSorted(final DataSet dataSet) {
+    @Override
+    protected HistogramRenderer getThis() {
+        return this;
+    }
+
+    protected static boolean isDataSetSorted(final DataSet dataSet, final int dimIndex) {
         if (dataSet.getDataCount() < 2) {
             return true;
         }
-        double xLast = dataSet.get(DIM_X, 0);
+        double xLast = dataSet.get(dimIndex, 0);
         for (int i = 1; i < dataSet.getDataCount(); i++) {
-            final double x = dataSet.get(DIM_X, i);
+            final double x = dataSet.get(dimIndex, i);
             if (x < xLast) {
                 return false;
             }
@@ -493,20 +518,37 @@ public class HistogramRenderer extends AbstractDataSetManagement<HistogramRender
         return true;
     }
 
-    public boolean isAutoSorting() {
-        return autoSortingProperty().get();
+    protected static boolean isVerticalDataSet(final DataSet ds) {
+        final boolean isVerticalDataSet;
+        if (ds instanceof Histogram) {
+            Histogram histogram = (Histogram) ds;
+            isVerticalDataSet = histogram.getBinCount(DIM_X) == 0 && histogram.getBinCount(DIM_Y) > 0;
+        } else {
+            isVerticalDataSet = !isDataSetSorted(ds, DIM_X) && isDataSetSorted(ds, DIM_Y); // if sorted both in X and Y -> default to horizontal
+        }
+        return isVerticalDataSet;
     }
 
-    public BooleanProperty autoSortingProperty() {
-        return autoSorting;
-    }
+    private static double getAxisMin(final Axis xAxis, final Axis yAxis, final boolean isHorizontalDataSet) { // NOPMD NOSONAR -- unavoidable complexity
+        final double xMin = Math.min(xAxis.getMin(), xAxis.getMax());
+        final double yMin = Math.min(yAxis.getMin(), yAxis.getMax());
 
-    public void setAutoSorting(final boolean autoSorting) {
-        this.autoSortingProperty().set(autoSorting);
-    }
+        if (isHorizontalDataSet) {
+            // horizontal DataSet - draw bars/filling towards y-axis (N.B. most common case)
+            if (yAxis.isLogAxis()) {
+                // draws axis towards the bottom side or  -- if axis is inverted towards the top side
+                return yAxis.isInvertedAxis() ? 0.0 : yAxis.getLength();
+            } else {
+                return yAxis.isInvertedAxis() ? Math.max(yAxis.getDisplayPosition(0), yAxis.getDisplayPosition(yMin)) : Math.min(yAxis.getDisplayPosition(0), yAxis.getDisplayPosition(yMin));
+            }
+        }
 
-    @Override
-    protected HistogramRenderer getThis() {
-        return this;
+        // vertical DataSet - draw bars/filling towards y-axis
+        if (xAxis.isLogAxis()) {
+            // draws axis towards the left side or  -- if axis is inverted towards the right side
+            return xAxis.isInvertedAxis() ? xAxis.getLength() : 0.0;
+        } else {
+            return yAxis.isInvertedAxis() ? Math.min(xAxis.getDisplayPosition(0), xAxis.getDisplayPosition(xMin)) : Math.max(xAxis.getDisplayPosition(0), xAxis.getDisplayPosition(xMin));
+        }
     }
 }
